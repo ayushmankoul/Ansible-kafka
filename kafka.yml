@@ -15,9 +15,6 @@
         state: present
       when: hostvars[item].ansible_host is defined
       with_items: "{{ groups['gcp_kafka'] }}"
-    - name: Create remote machine list
-      shell: cat /etc/hosts|grep -i kafka|grep -v -i google|cut -d" "
-        -f1|uniq>/etc/remote_machine_list
     - name: Populate service facts
       service_facts:       
     - name: Gather IP address
