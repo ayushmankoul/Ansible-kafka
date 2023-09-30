@@ -1,0 +1,39 @@
+---
+- name: Install Kafka and configure service
+  hosts: gcp_kafka
+  become: yes
+  gather_facts: true
+  collections:
+    - community.general
+    - community.crypto
+  pre_tasks:
+    - name: Add IP address of all hosts to all hosts
+      lineinfile:
+        dest: /etc/hosts
+        regexp: .*{{ item }}$
+        line: "{{ hostvars[item].ansible_host }} {{item}}"
+        state: present
+      when: hostvars[item].ansible_host is defined
+      with_items: "{{ groups['gcp_kafka'] }}"
+    - name: Create remote machine list
+      shell: cat /etc/hosts|grep -i kafka|grep -v -i google|cut -d" "
+        -f1|uniq>/etc/remote_machine_list
+    - name: Populate service facts
+      service_facts:       
+    - name: Gather IP address
+      set_fact:
+       ip_address: "{{ groups['gcp_kafka'] | map('extract', hostvars, 'ansible_host') | list }}"
+      run_once: true       
+    - name: Format IP addresses      
+      set_fact:        
+       formatted_ip_list: "IP:{{ ip_address | join(',IP:') }}"
+      when: ip_address | length > 0  
+      with_items: "{{ ip_address }}"      
+      run_once: true 
+  roles: 
+    - role: kafka_install
+      when: ansible_facts.services['kafka.service']['state'] != 'running'
+
+      
+     
+

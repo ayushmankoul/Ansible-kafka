@@ -1,0 +1,37 @@
+---
+- name: Define variable  for zookeeper
+  block:
+    - name: Create Zookeeper user
+      user:
+        name: zookeeper
+        state: present
+        shell: /bin/bash
+        createhome: no
+    - name: Download Zookeeper
+      get_url:
+        url: https://archive.apache.org/dist/zookeeper/zookeeper-3.4.11/zookeeper-3.4.11.tar.gz
+        dest: /tmp
+    - name: Extract Zookeeper
+      unarchive:
+        src: /tmp/zookeeper-3.4.11.tar.gz
+        dest: /opt
+        remote_src: yes
+        creates: /opt/zookeeper-3.4.11
+
+    - name: Create data directory for zookeeper
+      file: 
+        path: /var/zk-data
+        state: directory
+ 
+    - name: Create Log directory for zookeeper
+      file: 
+        path: /var/zk-logs
+        state: directory
+
+    - name: set variable for myid
+      shell: echo `hostname -i|cut -d" " -f1|cut -d"." -f4`
+      register: brokerid_val
+    - name: Create myid file
+      copy:
+        content: "{{ brokerid_val.stdout }}"
+        dest: /var/zk-data/myid

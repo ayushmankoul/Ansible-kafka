@@ -1,0 +1,174 @@
+---
+- name: Define variable  for kafka
+  block:
+    - name: Install Java (OpenJDK)
+      package:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - java-1.8.0-openjdk
+        - yum-utils
+        - python3
+        - python3-pyOpenSSL
+    - name: Create Kafka user
+      user:
+        name: kafka
+        state: present
+        shell: /bin/bash
+        createhome: yes
+    - name: Download Kafka
+      get_url:
+        url: https://downloads.apache.org/kafka/3.5.1/kafka_2.12-3.5.1.tgz
+        dest: /tmp
+    - name: Extract Kafka
+      unarchive:
+        src: /tmp/kafka_2.12-3.5.1.tgz
+        dest: /opt/
+        remote_src: yes
+        creates: /opt/kafka_2.12-3.5.1
+    - name: Create Kafka Configuration directory
+      file:
+        path: /opt/kafka-config
+        state: directory
+    - name: Copy Kafka Scripts
+      copy:
+        src: "{{ item }}"
+        dest: /opt/kafka-config/{{ item }}
+      loop:
+        - param.txt
+        - server_properties.sh
+        - zookeeper_param.txt
+        - zookeeper.sh
+        - server_ca.key
+        - server_ca.crt
+    - name: change permissions for scripts
+      command: chmod 755 /opt/kafka-config/{{ item }}
+      loop:
+        - server_properties.sh
+        - zookeeper.sh
+    - name: Import trusted CA from SSL certificate to truststore
+      java_cert:
+        cert_path: /opt/kafka-config/{{ item }}
+        keystore_path: /opt/kafka-config/kafka.server.truststore.jks
+        keystore_pass: "{{ storepass }}"
+        keystore_create: true
+        state: present
+        cert_alias: "{{ item }}"
+      loop:
+        - client_ca.crt
+    - name: Create Server Private key
+      openssl_privatekey:
+        path: /opt/kafka-config/kafka-server-key.key
+        type: RSA
+        passphrase: "{{ storepass }}"
+        cipher: auto
+    - name: Create CSR for Server Private Key
+      openssl_csr:
+        path: /opt/kafka-config/kafka-server.csr
+        privatekey_path: /opt/kafka-config/kafka-server-key.key
+        privatekey_passphrase: "{{ storepass }}"
+        country_name: IN
+        organization_name: Kafka Cluster
+        common_name: "Kafka Cluster"
+        subject_alt_name: "{{ formatted_ip_list }}"
+    - name: Generate an OpenSSL certificate signed with your own CA certificate
+      openssl_certificate:
+        path: /opt/kafka-config/kafka-server-ca-signed.crt
+        csr_path: /opt/kafka-config/kafka-server.csr
+        ownca_path: /opt/kafka-config/server_ca.crt
+        ownca_privatekey_path: /opt/kafka-config/server_ca.key
+        ownca_privatekey_passphrase: "{{ storepass }}"
+        provider: ownca
+    - name: Build PKCS12 file containing key and cert
+      openssl_pkcs12:
+        action: export
+        path: /opt/kafka-config/kafka-server.p12
+        privatekey_passphrase: "{{ storepass }}"
+        friendly_name: signed_csr
+        privatekey_path: /opt/kafka-config/kafka-server-key.key
+        certificate_path: /opt/kafka-config/kafka-server-ca-signed.crt
+        other_certificates: /opt/kafka-config/server_ca.crt
+        passphrase: "{{ storepass }}"
+        state: present
+    - name: Import a pkcs12 keystore with a specified alias
+      java_cert:
+        pkcs12_path: /opt/kafka-config/kafka-server.p12
+        pkcs12_alias: signed_csr
+        cert_alias: signed_csr
+        pkcs12_password: "{{ storepass }}"
+        keystore_path: /opt/kafka-config/kafka.server.keystore.jks
+        keystore_pass: "{{ storepass }}"
+        keystore_create: true
+        state: present
+    - name: Generate Kafka and Zookeeper Properties
+      command: bash /opt/kafka-config/{{ item }}
+      environment:
+        keystore_password: "{{ storepass }}"
+        ip_address: "{{ ip_address }}"
+      loop:
+        - server_properties.sh
+        - zookeeper.sh
+    - name: Create Kafka service script
+      copy:
+        content: >
+          [Unit]
+
+          Description=Apache Kafka
+
+          Requires=zookeeper.service
+
+          After=zookeeper.service
+
+          [Service]
+
+          Type=simple
+
+          ExecStart=/opt/kafka_2.12-3.5.1/bin/kafka-server-start.sh /opt/kafka_2.12-3.5.1/config/server.properties
+
+          ExecStop=/opt/kafka_2.12-3.5.1/bin/kafka-server-stop.sh 
+
+          ExecReload=/opt/kafka_2.12-3.5.1/bin/kafka-server-stop.sh; /opt/kafka_2.12-3.5.1/bin/kafka-server-start.sh /opt/kafka_2.12-3.5.1/config/server.properties
+
+          Restart=on-abnormal
+
+          [Install]
+
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/kafka.service
+    - name: Create Zookeeper service script
+      copy:
+        content: |
+          [Unit]
+          Description=Bootstrapped Zookeeper
+          After=syslog.target network.target
+          [Service]
+          Environment=ZOO_LOG_DIR=/var/zk-data/logs
+          Type=simple
+          User=root
+          Group=root
+          ExecStart=/opt/zookeeper-3.4.11/bin/zkServer.sh start-foreground
+          ExecStop=/opt/zookeeper-3.4.11/bin/zkServer.sh stop
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/zookeeper.service
+    - name: Enable and Start Zookeeper service
+      systemd:
+        name: zookeeper
+        state: started
+        enabled: yes
+    - name: Enable and Start Kafka service
+      systemd:
+        name: kafka
+        state: started
+        enabled: yes
+    - name: Reload Systemd
+      systemd:
+        daemon_reload: yes
+    - name: To Stop firewalld
+      systemd:
+        name: firewalld
+        enabled: no
+    - name: To ensure firewalld is stopped
+      systemd:
+        name: firewalld
+        state: stopped
